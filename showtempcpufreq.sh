@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# version: 2024.5.20 (更新去弹窗逻辑以支持 PVE 8.x/9.x)
+# version: 2026.3.18 (适配 PVE 9.x 去弹窗逻辑)
 # 添加硬盘信息的控制变量，如果你想不显示硬盘信息就设置为false
 # NVME硬盘
 sNVMEInfo=true
@@ -138,11 +138,9 @@ cat > $contentforpvejs << 'EOF'
         title: gettext('温度(°C)'),
         textField: 'thermalstate',
         renderer:function(value){
-            //value进来的值是有换行符的
             console.log(value)
             let b = value.trim().split(/\s+(?=^\w+-)/m).sort();
             let c = b.map(function (v){
-                // 风扇转速数据，直接返回
                 let fandata = v.match(/(?<=:\s+)[1-9]\d*(?=\s+RPM\s+)/ig)
                 if ( fandata ) {
                     return '风扇: ' + fandata.join(';')
@@ -151,7 +149,6 @@ cat > $contentforpvejs << 'EOF'
                 let name = v.match(/^[^-]+/)[0].toUpperCase();
                 
                 let temp = v.match(/(?<=:\s+)[+-][\d.]+(?=.?°C)/g);
-                // 某些没有数据的传感器,不是温度的传感器
                 if ( temp ) {
                     temp = temp.map(v => Number(v).toFixed(0))
                     
@@ -164,7 +161,6 @@ cat > $contentforpvejs << 'EOF'
                     
                     let crit = v.match(/(?<=\bcrit\b[^+]+\+)\d+/);
                     
-                    
                     return name + ': ' + temp + ( crit? ` ,crit: ${crit[0]}` : '');
                     
                 } else {
@@ -173,17 +169,12 @@ cat > $contentforpvejs << 'EOF'
                 
 
             });
-            console.log(c);
-            // 排除null值的
             c=c.filter( v => ! /^null$/.test(v) )
-            //console.log(c);
-            //排序，把cpu温度放最前
             let cpuIdx = c.findIndex(v => /CPU/i.test(v) );
             if (cpuIdx > 0) {
                 c.unshift(c.splice(cpuIdx, 1)[0]);
             }
             
-            console.log(c)
             c = c.join(' | ');
             return c;
          }
@@ -195,7 +186,6 @@ cat > $contentforpvejs << 'EOF'
           title: gettext('CPU频率(GHz)'),
           textField: 'cpuFreq',
           renderer:function(v){
-            //return v;
             console.log(v);
             let m = v.match(/(?<=^cpu[^\d]+)\d+/img);
             let m2 = m.map( e => ( e / 1000 ).toFixed(1) );
@@ -241,25 +231,20 @@ EOF
               title: gettext('NVME${nvi}'),
               textField: 'nvme${nvi}',
               renderer:function(value){
-                //return value;
                 try{
                     let  v = JSON.parse(value);
-                    //名字
                     let model = v.model_name;
                     if (! model) {
                         return '找不到硬盘，直通或已被卸载';
                     }
-                    // 温度
                     let temp = v.temperature?.current;
                     temp = ( temp !== undefined ) ? " | " + temp + '°C' : '' ;
                     
-                    // 通电时间
                     let pot = v.power_on_time?.hours;
                     let poth = v.power_cycle_count;
                     
                     pot = ( pot !== undefined ) ? (" | 通电: " + pot + '时' + ( poth ? ',次: '+ poth : '' )) : '';
                     
-                    // 读写
                     let log = v.nvme_smart_health_information_log;
                     let rw=''
                     let health=''
@@ -281,7 +266,6 @@ EOF
                         }
                     }
 
-                    // smart状态
                     let smart = v.smart_status?.passed;
                     if (smart === undefined ) {
                         smart = '';
@@ -291,7 +275,6 @@ EOF
                     
                     
                     let t = model  + temp + health + pot + rw + smart;
-                    //console.log(t);
                     return t;
                 }catch(e){
                     return '无法获得有效消息';
@@ -313,7 +296,6 @@ if $sODisksInfo;then
     for sd in $(ls /dev/sd[a-z] 2> /dev/null);do
         chmod +s /usr/sbin/smartctl
         chmod +s /usr/sbin/hdparm
-        #检测是否是真的机械键盘
         sdsn=$(awk -F '/' '{print $NF}' <<< $sd)
         sdcr=/sys/block/$sdsn/queue/rotational
         [ -f $sdcr ] || continue
@@ -348,30 +330,24 @@ EOF
               title: gettext('${sdtype}'),
               textField: 'sd${sdi}',
               renderer:function(value){
-                //return value;
                 try{
                     let  v = JSON.parse(value);
-                    console.log(v)
                     if (v.standy === true) {
                         return '休眠中'
                     }
                     
-                    //名字
                     let model = v.model_name;
                     if (! model) {
                         return '找不到硬盘，直通或已被卸载';
                     }
-                    // 温度
                     let temp = v.temperature?.current;
                     temp = ( temp !== undefined ) ? " | 温度: " + temp + '°C' : '' ;
                     
-                    // 通电时间
                     let pot = v.power_on_time?.hours;
                     let poth = v.power_cycle_count;
                     
                     pot = ( pot !== undefined ) ? (" | 通电: " + pot + '时' + ( poth ? ',次: '+ poth : '' )) : '';
                     
-                    // smart状态
                     let smart = v.smart_status?.passed;
                     if (smart === undefined ) {
                         smart = '';
@@ -381,7 +357,6 @@ EOF
                     
                     
                     let t = model + temp  + pot + smart;
-                    //console.log(t);
                     return t;
                 }catch(e){
                     return '无法获得有效消息';
@@ -490,26 +465,26 @@ fi
 
 echo "------------------------"
 echo "开始修改proxmoxlib.js文件"
-echo "去除订阅弹窗"
+echo "去除订阅弹窗 (适配 PVE 9.x)"
 
 if ! grep -q 'modbyshowtempfreq' $plibjs ;then
 
     [ ! -e $plibjs.$pvever.bak ] && cp $plibjs $plibjs.$pvever.bak
     
-    # 适配 PVE 8.x/9.x 的新方法：拦截 Ext.Msg.show
-    # 查找关键字段并在其函数内插入 return; 语句阻止弹窗
-    if grep -q "Ext\.Msg\.show" $plibjs; then
-        # 使用 sed 匹配多行并插入 return 和标记
-        sed -Ezi -e 's/(Ext\.Msg\.show\(\{title: gettext\('"'"'No valid subscription'"'"'\),)/\1\n\treturn; \/\/modbyshowtempfreq/' $plibjs
+    # 查找关键行号
+    line_num=$(grep -n "res.data.status.toLowerCase() !== 'active'" $plibjs | head -1 | cut -d: -f1)
+    
+    if [ -n "$line_num" ]; then
+        # 执行替换: !== 变为 ===
+        sed -i "${line_num}s/!==/===/" $plibjs
         
-        if [ $? -eq 0 ]; then
-            echo "修改成功 (适用新版 PVE)"
-            $dmode && sed -n "/No valid subscription/,+5p" $plibjs
-        else
-            echo "sed 执行失败"
-        fi
+        # 添加标记，防止重复修改
+        sed -i "${line_num}s/$/ \/\/modbyshowtempfreq/" $plibjs
+        
+        echo "修改成功 (适配 PVE 9.x 逻辑)"
+        $dmode && sed -n "${line_num}p" $plibjs
     else
-        echo "找不到 Ext.Msg.show 关键字，可能版本不支持"
+        echo "未找到特征代码行 (res.data.status...)，可能版本不兼容或已修改"
     fi
 else
     echo "已经修改过"
